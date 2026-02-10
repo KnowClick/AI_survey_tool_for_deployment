@@ -42,6 +42,7 @@ st.title("Arrival Survey Builder (Internal)")
 # ------------------------------------------------------------
 # Session state
 # ------------------------------------------------------------
+
 if "payload" not in st.session_state:
     st.session_state.payload = None
 if "client" not in st.session_state:
@@ -354,16 +355,13 @@ def _set_options_from_labels(it, labels):
         out.append({"key": k, "label": lab})
     it["answer_options"] = out
 
-def render_reorder_ui(payload: dict, *, selected_qid: str) -> None:
-    """UI to reorder answer options for one question (no commands)."""
-    import pandas as pd  # local import so you don't need top-level pandas import
 
+def render_reorder_ui(payload: dict, *, selected_qid: str) -> None:
     it = _find_item(payload, selected_qid)
     if not it:
         st.error("Reorder: question not found.")
         return
 
-    # Only for questions with options
     labels = [
         o.get("label")
         for o in (it.get("answer_options") or [])
@@ -377,56 +375,57 @@ def render_reorder_ui(payload: dict, *, selected_qid: str) -> None:
 
     st.markdown("### Reorder options")
 
-    # Build an editable table: users set Order numbers
-    df0 = pd.DataFrame({"Order": list(range(1, len(labels) + 1)), "Option": labels})
+    # Keep a working list in session_state so buttons update instantly
+    state_key = f"reorder_working_{selected_qid}"
+    if state_key not in st.session_state:
+        st.session_state[state_key] = labels
 
-    editor_key = f"reorder_editor_{selected_qid}"
-    edited = st.data_editor(
-        df0,
-        key=editor_key,
-        hide_index=True,
-        num_rows="fixed",
-        disabled=["Option"],  # only allow editing Order
-        use_container_width=True,
-    )
+    working = st.session_state[state_key]
 
-    c1, c2 = st.columns([1, 2])
-    with c1:
-        apply_btn = st.button("Apply order", key=f"apply_reorder_{selected_qid}")
-    with c2:
-        st.caption("Edit the **Order** values (1..N), then click **Apply order**.")
+    # Render rows
+    for i, lab in enumerate(working):
+        c1, c2, c3, c4 = st.columns([6, 1, 1, 2])
+        with c1:
+            st.write(lab)
+        with c2:
+            up = st.button("⬆️", key=f"up_{selected_qid}_{i}", disabled=(i == 0))
+        with c3:
+            down = st.button("⬇️", key=f"down_{selected_qid}_{i}", disabled=(i == len(working) - 1))
+        with c4:
+            pass
 
-    if not apply_btn:
-        return
+        if up:
+            working[i - 1], working[i] = working[i], working[i - 1]
+            st.session_state[state_key] = working
+            st.rerun()
 
-    # Validate + apply
-    try:
-        orders = [int(x) for x in edited["Order"].tolist()]
-    except Exception:
-        st.error("Order must be integers.")
-        return
+        if down:
+            working[i + 1], working[i] = working[i], working[i + 1]
+            st.session_state[state_key] = working
+            st.rerun()
 
-    n = len(labels)
-    if sorted(orders) != list(range(1, n + 1)):
-        st.error(f"Order must contain each number exactly once: 1..{n}.")
-        return
+    colA, colB, colC = st.columns([1, 1, 2])
+    with colA:
+        if st.button("✅ Save order", key=f"save_reorder_{selected_qid}"):
+            new_payload = copy.deepcopy(st.session_state.payload)
+            it2 = _find_item(new_payload, selected_qid)
+            _set_options_from_labels(it2, st.session_state[state_key])
 
-    # Create the new label order
-    pairs = list(zip(orders, edited["Option"].tolist()))
-    pairs.sort(key=lambda x: x[0])
-    new_labels = [lab for _, lab in pairs]
+            it2.setdefault("ai_actions", {})
+            it2["ai_actions"]["reordered_by_user"] = True
 
-    # Update payload in session state
-    new_payload = copy.deepcopy(st.session_state.payload)
-    it2 = _find_item(new_payload, selected_qid)
-    _set_options_from_labels(it2, new_labels)
+            st.session_state.payload = new_payload
+            st.session_state.logs.append(f"✅ Reordered options in Q{selected_qid}.")
+            st.rerun()
 
-    it2.setdefault("ai_actions", {})
-    it2["ai_actions"]["reordered_by_user"] = True
+    with colB:
+        if st.button("↩️ Reset", key=f"reset_reorder_{selected_qid}"):
+            st.session_state[state_key] = labels
+            st.rerun()
 
-    st.session_state.payload = new_payload
-    st.session_state.logs.append(f"✅ Reordered options in Q{selected_qid}.")
-    do_rerun()
+    with colC:
+        st.caption("Use ⬆️ / ⬇️ to reorder. Click **Save order** to apply.")
+
 
 
 
